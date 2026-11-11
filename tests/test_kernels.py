@@ -5,8 +5,7 @@ The reference follows the release's modeling_qsa.py: a block's score is the
 sum over indexer heads of relu(q . k); the query attends the top budget/4
 blocks plus its own (partial) block.
 
-    docker run --rm --device /dev/dri -v "$PWD:/w" -w /w --entrypoint python3 \
-        qwen3.8-qsa-vllm-xpu:v0.31.0 tests/test_kernels.py [seq_lens]
+    python3 tests/test_kernels.py [seq_lens]
 """
 import math
 import os

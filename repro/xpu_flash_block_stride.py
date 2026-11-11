@@ -8,8 +8,7 @@ on XPU indexes blocks as if they were contiguous and returns wrong output.
 Expected on vllm/vllm-openai-xpu:v0.31.0 (vllm-xpu-kernels 0.1.15 or 0.1.17.1):
 gap 0 is correct for both; with a gap, flash has ~50% relative error, Triton ~3e-3.
 
-    docker run --rm --device /dev/dri -v "$PWD:/w" -w /w --entrypoint python3 \
-        vllm/vllm-openai-xpu:v0.31.0 repro/xpu_flash_block_stride.py
+    python3 repro/xpu_flash_block_stride.py
 """
 import torch
 from vllm.v1.attention.backends.fa_utils import flash_attn_varlen_func

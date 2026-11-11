@@ -2,7 +2,7 @@
 import json
 import urllib.request
 
-from common import args, chars_per_token, stream
+from common import args, chars_per_token, fit, stream
 
 a = args(__doc__, "2000,64000,230000")
 
@@ -15,7 +15,7 @@ def spec():
 
 cpt = chars_per_token(a)
 for n in a.lengths:
-    prompt = a.text[: int(n * cpt)] + "\n\nWrite a detailed, structured summary of the text above."
+    prompt = fit(a, n, cpt) + "\n\nWrite a detailed, structured summary of the text above."
     d0, a0 = spec()
     speeds = []
     for _ in range(3):

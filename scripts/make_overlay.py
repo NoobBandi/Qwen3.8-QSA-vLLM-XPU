@@ -8,6 +8,9 @@ config.json and symlinks every other file of the release.
 
     python3 scripts/make_overlay.py /models/Qwen3.8-27B-QSA-BF16
     # -> /models/Qwen3.8-27B-QSA-BF16/vllm-qsa, pass it to --model
+
+With --dense it makes vllm-dense instead: plain Qwen3.5 with the indexers
+ignored, the baseline bench/sweep.sh compares against.
 """
 import argparse
 import json
@@ -20,11 +23,12 @@ ARCH = "QSAQwen3_5ForConditionalGeneration"
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("model", help="the downloaded Qwen3.8-27B-QSA-BF16 directory")
-    ap.add_argument("--out", help="overlay directory (default: <model>/vllm-qsa)")
+    ap.add_argument("--dense", action="store_true", help="plain Qwen3.5, no sparse attention")
+    ap.add_argument("--out", help="overlay directory (default: <model>/vllm-qsa or vllm-dense)")
     args = ap.parse_args()
 
     model = os.path.abspath(args.model)
-    out = os.path.abspath(args.out or os.path.join(model, "vllm-qsa"))
+    out = os.path.abspath(args.out or os.path.join(model, "vllm-dense" if args.dense else "vllm-qsa"))
     config = json.load(open(os.path.join(model, "config.json")))
     if "qsa" not in config:
         sys.exit(f"{model}/config.json has no 'qsa' section; is this the QSA release?")
@@ -32,12 +36,15 @@ def main() -> None:
     config.pop("auto_map", None)
     config["model_type"] = "qwen3_5"
     config["architectures"] = [ARCH]
+    if args.dense:
+        config["architectures"] = ["Qwen3_5ForConditionalGeneration"]
+        del config["qsa"]
 
     os.makedirs(out, exist_ok=True)
     for name in sorted(os.listdir(model)):
         src = os.path.join(model, name)
         dst = os.path.join(out, name)
-        if name == "config.json" or not os.path.isfile(src) or os.path.abspath(src) == out:
+        if name == "config.json" or not os.path.isfile(src):
             continue
         if os.path.lexists(dst):
             os.remove(dst)

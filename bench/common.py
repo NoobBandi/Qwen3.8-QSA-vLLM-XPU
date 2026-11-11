@@ -22,9 +22,24 @@ def post(url, body):
     return urllib.request.urlopen(req, timeout=3600)
 
 
+def count(a, text):
+    return json.load(post(a.url + "/tokenize", {"model": a.model, "prompt": text}))["count"]
+
+
 def chars_per_token(a):
     sample = a.text[:200000]
-    return len(sample) / json.load(post(a.url + "/tokenize", {"model": a.model, "prompt": sample}))["count"]
+    return len(sample) / count(a, sample)
+
+
+def fit(a, tokens, cpt):
+    """The start of the corpus, cut to about `tokens` tokens (within 0.5%)."""
+    chars = int(tokens * cpt)
+    for _ in range(4):
+        got = count(a, a.text[:chars])
+        if abs(got - tokens) <= tokens * 0.005:
+            break
+        chars = int(chars * tokens / got)
+    return a.text[:chars]
 
 
 def stream(a, content, max_tokens, **extra):

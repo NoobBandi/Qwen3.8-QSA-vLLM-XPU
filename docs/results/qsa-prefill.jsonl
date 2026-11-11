@@ -1,0 +1,6 @@
+{"prompt_tokens": 547, "ttft_s": 0.36, "prefill_tok_s": 1517.4}
+{"prompt_tokens": 4058, "ttft_s": 1.99, "prefill_tok_s": 2038.3}
+{"prompt_tokens": 15985, "ttft_s": 7.79, "prefill_tok_s": 2053.2}
+{"prompt_tokens": 64351, "ttft_s": 31.95, "prefill_tok_s": 2014.4}
+{"prompt_tokens": 127943, "ttft_s": 65.23, "prefill_tok_s": 1961.5}
+{"prompt_tokens": 256046, "ttft_s": 136.41, "prefill_tok_s": 1877.1}

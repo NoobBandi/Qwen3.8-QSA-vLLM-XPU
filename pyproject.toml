@@ -10,8 +10,8 @@ readme = "README.md"
 license = "Apache-2.0"
 license-files = ["LICENSE", "NOTICE"]
 requires-python = ">=3.12"
-# Pinned by the image, not here: vllm 0.31.0 (XPU build) and
-# vllm-xpu-kernels 0.1.17.1. See the Dockerfile.
+# Not declared here, so pip leaves an existing vLLM build alone: needs vllm
+# 0.31.0 for XPU and vllm-xpu-kernels 0.1.17.1 (see README).
 dependencies = []
 
 [project.urls]

@@ -1,0 +1,6 @@
+{"prompt_tokens": 525, "decode_tok_s": [74.1, 74.2, 74.2], "accepted_per_step": 2.17}
+{"prompt_tokens": 4036, "decode_tok_s": [70.1, 70.1, 71.2], "accepted_per_step": 2.08}
+{"prompt_tokens": 15963, "decode_tok_s": [71.7, 70.1, 71.7], "accepted_per_step": 2.1}
+{"prompt_tokens": 64330, "decode_tok_s": [70.6, 71.2, 70.1], "accepted_per_step": 2.11}
+{"prompt_tokens": 127920, "decode_tok_s": [72.2, 66.9, 69.4], "accepted_per_step": 2.08}
+{"prompt_tokens": 256025, "decode_tok_s": [61.0, 61.1, 66.0], "accepted_per_step": 1.81}

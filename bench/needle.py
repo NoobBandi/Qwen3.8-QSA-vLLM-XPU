@@ -1,14 +1,14 @@
 """Three passphrases hidden at 15%, 50% and 85% of a long context; can the model recall all three?"""
 import random
 
-from common import args, chars_per_token, stream
+from common import args, chars_per_token, fit, stream
 
 a = args(__doc__, "20000,112000,230000")
 cpt = chars_per_token(a)
 random.seed(7)
 failed = 0
 for n in a.lengths:
-    text = a.text[: int(n * cpt)]
+    text = fit(a, n, cpt)
     codes = [f"{random.randint(1000, 9999)}-{random.choice(['blue-whale', 'firebird', 'green-pine', 'ginkgo'])}" for _ in range(3)]
     for i in reversed(range(3)):
         at = int(len(text) * (0.15 + 0.35 * i))

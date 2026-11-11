@@ -1,7 +1,6 @@
 """Prefill block selection (scorer + top-k) on XPU against torch, and its time.
 
-    docker run --rm --device /dev/dri -v "$PWD:/w" -w /w --entrypoint python3 \
-        qwen3.8-qsa-vllm-xpu:v0.31.0 tests/test_prefill_select.py [contexts]
+    python3 tests/test_prefill_select.py [contexts]
 """
 import sys
 import time
