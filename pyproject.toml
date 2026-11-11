@@ -3,7 +3,7 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "qwen3.8-qsa-vllm-xpu"
+name = "Qwen3.8-QSA-vLLM-XPU"
 version = "0.1.0"
 description = "vLLM plugin: Qwen3.8-27B-QSA sparse attention on Intel XPU (Arc Pro B70 / Xe2)"
 readme = "README.md"
@@ -15,7 +15,7 @@ requires-python = ">=3.12"
 dependencies = []
 
 [project.urls]
-Source = "https://github.com/NoobBandi/qwen3.8-qsa-vllm-xpu"
+Source = "https://github.com/NoobBandi/Qwen3.8-QSA-vLLM-XPU"
 
 [project.entry-points."vllm.general_plugins"]
 qwen38_qsa = "qwen38_qsa:register"

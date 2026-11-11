@@ -1,4 +1,4 @@
-# qwen3.8-qsa-vllm-xpu
+# Qwen3.8-QSA-vLLM-XPU
 
 Run [Qwen3.8-27B-QSA](https://huggingface.co/higa2515/Qwen3.8-27B-QSA-BF16) on Intel GPUs with vLLM,
 including its sparse attention.
@@ -49,7 +49,7 @@ You need:
 - The [52 GB release](https://huggingface.co/higa2515/Qwen3.8-27B-QSA-BF16).
 
 ```bash
-git clone https://github.com/NoobBandi/qwen3.8-qsa-vllm-xpu && cd qwen3.8-qsa-vllm-xpu
+git clone https://github.com/NoobBandi/Qwen3.8-QSA-vLLM-XPU && cd Qwen3.8-QSA-vLLM-XPU
 
 # 0.1.15, which ships with vLLM 0.31.0, overflows with QSA's KV layout (see Pitfalls)
 pip install "vllm_xpu_kernels==0.1.17.1" --extra-index-url https://vllm-project.github.io/vllm-xpu-kernels/whl
