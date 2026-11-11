@@ -120,10 +120,14 @@ These variables help with debugging: `QWEN38_QSA_DENSE`, `QWEN38_QSA_SYNC`, `QWE
 
 ## Credits
 
-- Model and QSA training: higa2515.
-- Reference llama.cpp engine: kuraneko1.
-- Qwen4Exp QSA implementation: vLLM.
-- Xe2 attention kernel, prefill launch and the sparse-draft idea: KaloyanNaumov
-  ([zhaohb/vllm](https://github.com/zhaohb/vllm) #2, #8, #4).
+- Model and QSA training: [higa2515](https://huggingface.co/higa2515)
+  ([Qwen3.8-27B-QSA-BF16](https://huggingface.co/higa2515/Qwen3.8-27B-QSA-BF16)).
+- Reference llama.cpp engine: [kuraneko1](https://github.com/kuraneko1)
+  ([Qwen3.8-27B-QSA-llama.cpp](https://github.com/kuraneko1/Qwen3.8-27B-QSA-llama.cpp)).
+- Qwen4Exp QSA implementation: [vLLM](https://github.com/vllm-project/vllm)
+  ([`vllm/models/qwen4_exp`](https://github.com/vllm-project/vllm/tree/v0.31.0/vllm/models/qwen4_exp)).
+- Xe2 attention kernel, prefill launch and the sparse-draft idea: [KaloyanNaumov](https://github.com/KaloyanNaumov),
+  in zhaohb/vllm [#2](https://github.com/zhaohb/vllm/pull/2), [#8](https://github.com/zhaohb/vllm/pull/8)
+  and [#4](https://github.com/zhaohb/vllm/pull/4).
 
 Apache-2.0. See [NOTICE](NOTICE).
