@@ -1,0 +1,24 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "qwen3.8-qsa-vllm-xpu"
+version = "0.1.0"
+description = "vLLM plugin: Qwen3.8-27B-QSA sparse attention on Intel XPU (Arc Pro B70 / Xe2)"
+readme = "README.md"
+license = "Apache-2.0"
+license-files = ["LICENSE", "NOTICE"]
+requires-python = ">=3.12"
+# Pinned by the image, not here: vllm 0.31.0 (XPU build) and
+# vllm-xpu-kernels 0.1.17.1. See the Dockerfile.
+dependencies = []
+
+[project.urls]
+Source = "https://github.com/NoobBandi/qwen3.8-qsa-vllm-xpu"
+
+[project.entry-points."vllm.general_plugins"]
+qwen38_qsa = "qwen38_qsa:register"
+
+[tool.setuptools.packages.find]
+include = ["qwen38_qsa*"]

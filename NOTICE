@@ -1,0 +1,20 @@
+qwen3.8-qsa-vllm-xpu
+Licensed under the Apache License, Version 2.0 (see LICENSE).
+
+This project contains code from:
+
+vLLM (https://github.com/vllm-project/vllm), Apache-2.0,
+Copyright contributors to the vLLM project.
+  qwen38_qsa/indexer_qsa.py, qwen38_qsa/qsa_cache.py, qwen38_qsa/ops/qsa.py,
+  qwen38_qsa/ops/qsa_indexer.py and qwen38_qsa/ops/qsa_pre_indexer.py are
+  adapted from vllm/models/qwen4_exp; qwen38_qsa/attention.py adapts its
+  attention layer and backend. Each file names its source; changes inside
+  vendored files are marked `qwen38_qsa:`.
+
+zhaohb/vllm (https://github.com/zhaohb/vllm), Apache-2.0, work by KaloyanNaumov:
+  qwen38_qsa/ops/qsa_attn2.py is the Xe2 sparse attention kernel from pull
+  request #2 (commit 1294a7e5); the XPU prefill scorer launch comes from pull
+  request #8; running the MTP draft layer sparse follows pull request #4.
+
+The model this plugin serves, Qwen3.8-27B-QSA-BF16 by higa2515, is Apache-2.0,
+Copyright 2026 Alibaba Cloud. No model weights are included here.
