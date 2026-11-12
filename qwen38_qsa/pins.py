@@ -31,7 +31,7 @@ import torch
 CAP = int(os.environ.get("QWEN38_QSA_PIN_CAP", "192"))   # blocks (3 per call)
 WINDOW = 3                                             # the call's block and the two after
 BONUS = 1.0e6
-_SLOT_CAPACITY = 1 << 22                               # KV token slots covered
+_SLOT_CAPACITY = 1 << 20      # KV token slots covered (the 256K cache here holds ~275K)
 
 STEP: torch.Tensor | None = None      # [max tokens per step] uint8, this step's flags
 SLOTS: torch.Tensor | None = None     # [_SLOT_CAPACITY + 1] uint8, per KV slot; last = sink
@@ -97,13 +97,15 @@ def cached_bonus(kind: str, first: bool, page_table: torch.Tensor, rows_per_page
 def block_bonus(page_table: torch.Tensor, rows_per_page: int, columns: int,
                 compress_ratio: int) -> torch.Tensor:
     """[requests, columns] float32: BONUS on each request's newest pinned blocks."""
-    device = page_table.device
-    column = torch.arange(columns, device=device)
-    page = page_table[:, column // rows_per_page].long().clamp(min=0)
-    first = page * (rows_per_page * compress_ratio) + (column % rows_per_page) * compress_ratio
-    offsets = torch.arange(compress_ratio, device=device)
-    slots = (first[..., None] + offsets).clamp(max=_SLOT_CAPACITY)
-    pinned = SLOTS[slots].amax(-1)                       # a <tool_call> in the block
+    page_tokens = rows_per_page * compress_ratio
+    pages = _SLOT_CAPACITY // page_tokens
+    # Flags per block of every page (a <tool_call> anywhere in the block),
+    # then each request's blocks in logical order through its page table --
+    # no per-column index tensor, which would cost KV-cache memory in every
+    # captured graph.
+    per_page = SLOTS[: pages * page_tokens].view(pages, rows_per_page, compress_ratio).amax(-1)
+    table = page_table.clamp(min=0, max=pages - 1).long()
+    pinned = per_page[table].reshape(page_table.shape[0], -1)[:, :columns]
     window = pinned.clone()
     for shift in range(1, WINDOW):                      # ... and the blocks after it
         window[:, shift:] = torch.maximum(window[:, shift:], pinned[:, :-shift])

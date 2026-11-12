@@ -564,13 +564,20 @@ def _topk(
         # with them its tool-call markup. Duplicates are the bug's signature,
         # so only those rows are redone exactly; exact top-k for every
         # prefill row would cost about 30% of long-context prefill speed.
+        # Checked 512 rows at a time: the sort's temporaries for a whole
+        # 4096-row chunk would raise the peak vLLM sizes the KV cache from.
         rows = logits.shape[0]
-        picked = block_indices[:rows].sort(dim=1).values
-        bad = ((picked[:, 1:] == picked[:, :-1]) & (picked[:, 1:] >= 0)).any(dim=1).nonzero().squeeze(1)
-        if bad.numel():
-            redo = torch.empty((bad.numel(), block_topk), dtype=block_indices.dtype, device=logits.device)
-            _exact_topk(logits[bad], visible_blocks[bad], block_topk, redo)
-            block_indices[bad] = redo
+        for start in range(0, rows, 512):
+            end = min(start + 512, rows)
+            picked = block_indices[start:end].sort(dim=1).values
+            dup = (picked[:, 1:] == picked[:, :-1]) & (picked[:, 1:] >= 0)
+            bad = dup.any(dim=1).nonzero().squeeze(1) + start
+            del picked, dup
+            if bad.numel():
+                redo = torch.empty((bad.numel(), block_topk), dtype=block_indices.dtype,
+                                   device=logits.device)
+                _exact_topk(logits[bad], visible_blocks[bad], block_topk, redo)
+                block_indices[bad] = redo
 
 
 def _exact_topk(
@@ -726,16 +733,15 @@ def qsa_select_paged_prefill(
         (_TOPK_WORKSPACE_BYTES,), dtype=torch.uint8, device=q.device
     )
 
-    bonus = row_request = None
+    bonus = spans = None
     if pin and pins.enabled():
         bonus = pins.cached_bonus("prefill", pin_first, page_table, k_cache.shape[1],
                                   logits_width, compress_ratio)
-        row_request = torch.searchsorted(
-            query_start_loc[1:].contiguous(),
-            torch.arange(rows, device=q.device, dtype=query_start_loc.dtype)
-            + query_start_loc[0],
-            right=True,
-        ).clamp(max=bonus.shape[0] - 1)
+        # Each request's rows are contiguous; prefill runs eagerly, so the
+        # offsets can come to the host and the bonus is added in place,
+        # without a [rows, width] temporary (it would cost the KV cache).
+        starts = (query_start_loc - query_start_loc[0]).tolist()
+        spans = list(zip(starts[:-1], starts[1:]))
 
     for query_start in range(0, rows, rows_per_chunk):
         query_end = min(query_start + rows_per_chunk, rows)
@@ -753,7 +759,10 @@ def qsa_select_paged_prefill(
             num_queries=query_end - query_start,
         )
         if bonus is not None:
-            logits.add_(bonus.index_select(0, row_request[query_slice]))
+            for request, (first, last) in enumerate(spans[: bonus.shape[0]]):
+                a, b = max(first, query_start), min(last, query_end)
+                if a < b:
+                    logits[a - query_start:b - query_start].add_(bonus[request])
         _topk(
             logits,
             visible_blocks[query_slice],
