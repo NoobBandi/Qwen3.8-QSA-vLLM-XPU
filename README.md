@@ -16,15 +16,15 @@ Throughput in tokens/s:
 
 | Context | Prefill, QSA | Prefill, dense | Decode, QSA | Decode, dense |
 |--------:|-------------:|---------------:|------------:|--------------:|
-| 0.5K | 1,517 | 1,617 | 74.2 | 71.2 |
-| 4K | 2,038 | 2,221 | 70.5 | 74.4 |
-| 16K | 2,053 | 2,324 | 71.2 | 70.0 |
-| 64K | 2,014 | 2,064 | **70.6** | 66.1 |
-| 128K | **1,962** | 1,741 | **69.5** | 59.2 |
-| 256K | **1,877** | 1,299 | **62.7** | 51.6 |
+| 0.5K | 1,566 | 1,617 | 66.9 | 71.2 |
+| 4K | 2,090 | 2,221 | 66.0 | 74.4 |
+| 16K | 2,060 | 2,324 | 64.3 | 70.0 |
+| 64K | 1,989 | 2,064 | 67.8 | 66.1 |
+| 128K | **1,922** | 1,741 | **64.1** | 59.2 |
+| 256K | **1,808** | 1,299 | **62.8** | 51.6 |
 
-At 256K, QSA prefills 1.44× and decodes 1.21× as fast as dense. Below 64K, prefill is 2–12% slower,
-because the indexer has a fixed cost. Decode is within a few percent of dense up to 16K.
+At 256K, QSA prefills 1.39× and decodes 1.22× as fast as dense. Below 64K, prefill is 3–11% slower
+and decode 6–11% slower: the indexer, exact top-k and tool-call pinning have a fixed cost per step.
 
 The two runs differ only in attention. Both use the same vLLM build and the same `scripts/serve.sh` settings:
 
@@ -72,8 +72,15 @@ while kernels compile. If you write your own command, keep these settings:
 - **Model.** The plugin registers `QSAQwen3_5ForConditionalGeneration`: vLLM's Qwen3.5 with QSA
   attention, adapted from vLLM's Qwen4Exp QSA to match the release's `modeling_qsa.py`. The backbone
   weights load unchanged.
-- **Kernels.** Scoring and attention are Triton kernels tuned for Xe2. Attention uses KaloyanNaumov's
-  `attn2`. Top-k comes from vllm-xpu-kernels.
+- **Kernels.** Scoring and attention are Triton kernels tuned for Xe2; attention uses KaloyanNaumov's
+  `attn2`. Top-k is exact (see Pitfalls). The indexer runs in BF16; against an FP32 recompute of the
+  reference selection at 136K, it picks 511 of the same 512 blocks.
+- **Tool-call pinning.** The block holding each of the newest 64 `<tool_call>` tokens, and the two
+  blocks after it, are always attended. This goes beyond the release's selection rule. In long agent
+  sessions the indexer rarely picks earlier tool calls. Without them, the model can write
+  `<|im_start|>` where `<function=` belongs, and the parser drops the call: an agent then stops
+  mid-task. In a 136K-token session, a failing call went from 3 valid of 36 samples to 36 of 36, which
+  matches dense. `QWEN38_QSA_PIN_CAP=0` turns it off.
 - **Prefill** is sparse as well as decode.
 - **MTP draft.** The draft layer is sparse too, and borrows layer 63's indexer, because the checkpoint
   has none for it. It attends 4,096 tokens, and the newest 1,024 are always among them. Set
@@ -89,13 +96,20 @@ while kernels compile. If you write your own command, keep these settings:
   a QSA cache.
 - **vllm-xpu-kernels 0.1.15 overflows int32 GDN offsets** with this layout and loses the device
   ([#658](https://github.com/vllm-project/vllm-xpu-kernels/issues/658)). Install 0.1.17.1 instead.
+- **vllm-xpu-kernels' `top_k_per_row_decode` is not exact.** It returns duplicate indices, and so drops
+  candidates, when a row has many equal scores or a group far above the rest. This is the same class of
+  bug as [vllm#51782](https://github.com/vllm-project/vllm/issues/51782) on CUDA. Decode uses
+  `torch.topk`; prefill repairs only the rows that came back with duplicates
+  ([`tests/test_topk.py`](tests/test_topk.py)).
 - **A custom op inside an inductor partition can lose the device.** Add it to `splitting_ops`.
 
 ## Limitations
 
 - Tested only on 2× Arc Pro B70 with vLLM 0.31.0.
-- Prefill below 64K is up to 12% slower than dense.
-- At 256K, the borrowed draft indexer accepts 1.81 of 3 MTP tokens per step; dense accepts 2.27.
+- Below 64K, prefill and decode are up to 11% slower than dense.
+- At 256K, the borrowed draft indexer accepts 1.95 of 3 MTP tokens per step; dense accepts 2.27.
+- The release's indexers were distilled at 16K on web text with the backbone frozen (the paper's stage
+  1 only). Tool-call pinning makes up for what they miss in long agent sessions.
 - Requests with images are attended sparsely. The reference runs them dense; long multimodal contexts
   were not tested.
 - Without a per-card affinity patch, two-card runs pin about 64 GB of host RAM
@@ -106,6 +120,8 @@ while kernels compile. If you write your own command, keep these settings:
 ```bash
 python3 tests/test_kernels.py          # kernels against a torch reference, on XPU
 python3 tests/test_prefill_select.py
+python3 tests/test_topk.py             # top-k exactness
+python3 tests/test_pins.py             # tool-call pinning (CPU)
 
 # Benchmarks against a running server. corpus.txt is any long text; vLLM's source works:
 find "$(python3 -c 'import vllm, os; print(os.path.dirname(vllm.__file__))')" -name "*.py" | sort | xargs cat > corpus.txt
@@ -115,8 +131,8 @@ bench/sweep.sh .../vllm-qsa .../vllm-dense               # data for the chart ab
 python3 bench/plot.py
 ```
 
-These variables help with debugging: `QWEN38_QSA_DENSE`, `QWEN38_QSA_SYNC`, `QWEN38_QSA_PROFILE` and
-`QWEN38_QSA_UNFUSED` (see the source).
+These variables help with debugging: `QWEN38_QSA_DENSE`, `QWEN38_QSA_SYNC`, `QWEN38_QSA_PROFILE`,
+`QWEN38_QSA_UNFUSED` and `QWEN38_QSA_EXACT_TOPK=0` (the stock top-k), see the source.
 
 ## Credits
 

@@ -46,6 +46,20 @@ def main() -> None:
         dst = os.path.join(out, name)
         if name == "config.json" or not os.path.isfile(src):
             continue
+        # Plain Qwen3.5 has no module for the indexer weights; vLLM would
+        # refuse to load them, so dense leaves them out of the overlay and
+        # out of its copy of the weight index.
+        if args.dense and name == "qsa-indexers.safetensors":
+            continue
+        if args.dense and name == "model.safetensors.index.json":
+            index = json.load(open(src))
+            index["weight_map"] = {k: v for k, v in index["weight_map"].items()
+                                   if v != "qsa-indexers.safetensors"}
+            if os.path.lexists(dst):
+                os.remove(dst)
+            with open(dst, "w") as f:
+                json.dump(index, f, indent=2)
+            continue
         if os.path.lexists(dst):
             os.remove(dst)
         os.symlink(os.path.relpath(src, out), dst)

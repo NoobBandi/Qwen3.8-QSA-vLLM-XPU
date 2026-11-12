@@ -6,6 +6,8 @@
 import torch
 
 import vllm.envs as envs
+
+from .. import pins
 from vllm import _custom_ops as ops
 from vllm.model_executor.warmup.jit_warmup_triton_helper import (
     TritonWarmupTensor,
@@ -29,6 +31,10 @@ _DECODE_LAUNCH = tuple(
     ).split(",")
 )
 _DECODE_BLOCK_N = _DECODE_LAUNCH[0]
+# qwen38_qsa: exact torch.topk unless QWEN38_QSA_EXACT_TOPK=0 (see _topk).
+_EXACT_TOPK = _os.environ.get("QWEN38_QSA_EXACT_TOPK", "1") == "1"
+# Batches up to this many rows (decode) always take the exact top-k.
+_EXACT_ROWS = 64
 
 
 @triton.jit
@@ -524,7 +530,8 @@ def _topk(
     # qwen38_qsa: torch.ops._C.persistent_topk / cooperative_topk are CUDA-only.
     # vllm-xpu-kernels' top_k_per_row_decode with next_n=1 bounds row i by
     # visible_blocks[i] and pads short rows with -1, the same contract (as in
-    # vllm-project/vllm#64926); about 15x faster here than a masked torch.topk.
+    # vllm-project/vllm#64926); about 7x faster here than a masked torch.topk
+    # on prefill-sized batches, but not always exact (see below).
     del topk_workspace
     block_topk = token_topk // compress_ratio
     if recent_blocks:
@@ -533,6 +540,11 @@ def _topk(
         column = torch.arange(logits.shape[1], device=logits.device)
         recent = column[None, :] >= (visible_blocks[:, None] - recent_blocks)
         logits.add_(recent.to(logits.dtype) * 1.0e30)
+    if _EXACT_TOPK and logits.shape[0] <= _EXACT_ROWS:
+        # Decode-sized batches: exact top-k outright (it is captured in the
+        # XPU graph, where rows cannot be picked out afterwards).
+        _exact_topk(logits, visible_blocks, block_topk, block_indices)
+        return
     ops.top_k_per_row_decode(
         logits,
         1,
@@ -543,6 +555,43 @@ def _topk(
         logits.stride(1),
         block_topk,
     )
+    if _EXACT_TOPK and not torch.xpu.is_current_stream_capturing():
+        # vllm-xpu-kernels 0.1.17.1's top_k_per_row_decode returns duplicate
+        # indices -- and so drops genuine candidates -- when a row has many
+        # equal scores or a group far above the rest (tests/test_topk.py),
+        # the same class of bug as vllm-project/vllm#51782 on CUDA. At long
+        # context that cost the model the tokens right before the query, and
+        # with them its tool-call markup. Duplicates are the bug's signature,
+        # so only those rows are redone exactly; exact top-k for every
+        # prefill row would cost about 30% of long-context prefill speed.
+        rows = logits.shape[0]
+        picked = block_indices[:rows].sort(dim=1).values
+        bad = ((picked[:, 1:] == picked[:, :-1]) & (picked[:, 1:] >= 0)).any(dim=1).nonzero().squeeze(1)
+        if bad.numel():
+            redo = torch.empty((bad.numel(), block_topk), dtype=block_indices.dtype, device=logits.device)
+            _exact_topk(logits[bad], visible_blocks[bad], block_topk, redo)
+            block_indices[bad] = redo
+
+
+def _exact_topk(
+    logits: torch.Tensor,
+    visible_blocks: torch.Tensor,
+    block_topk: int,
+    block_indices: torch.Tensor,
+) -> None:
+    """torch.topk over each row's visible columns; -1 pads rows shorter than k.
+
+    Overwrites the invisible columns of ``logits`` with -inf.
+    """
+    rows, columns = logits.shape
+    column = torch.arange(columns, device=logits.device)
+    logits.masked_fill_(column[None, :] >= visible_blocks[:rows, None], float("-inf"))
+    k = min(block_topk, columns)
+    values, indices = torch.topk(logits, k, dim=1, sorted=False)
+    indices = indices.to(torch.int32).masked_fill_(values == float("-inf"), -1)
+    block_indices[:rows, :k].copy_(indices)
+    if k < block_topk:
+        block_indices[:rows, k:].fill_(-1)
 
 
 def qsa_select_paged_decode(
@@ -555,6 +604,8 @@ def qsa_select_paged_decode(
     decode_query_len: int,
     block_indices: torch.Tensor,
     recent_blocks: int = 0,
+    pin: bool = False,
+    pin_first: bool = True,
 ) -> None:
     """Score and select compressed blocks for a request-major decode batch.
 
@@ -606,6 +657,10 @@ def qsa_select_paged_decode(
         STAGES=_DECODE_LAUNCH[1],
         num_warps=1 if k_cache.dtype == torch.float8_e4m3fn else _DECODE_LAUNCH[2],
     )
+    if pin and pins.enabled():
+        bonus = pins.cached_bonus("decode", pin_first, page_table, k_cache.shape[1],
+                                  columns, compress_ratio)
+        logits.view(num_requests, decode_query_len, columns).add_(bonus[:, None, :])
     _topk(
         logits,
         visible_blocks,
@@ -629,6 +684,8 @@ def qsa_select_paged_prefill(
     block_indices: torch.Tensor,
     max_seq_len: int,
     recent_blocks: int = 0,
+    pin: bool = False,
+    pin_first: bool = True,
 ) -> None:
     """Score and select compressed prefill blocks in bounded chunks.
 
@@ -669,6 +726,17 @@ def qsa_select_paged_prefill(
         (_TOPK_WORKSPACE_BYTES,), dtype=torch.uint8, device=q.device
     )
 
+    bonus = row_request = None
+    if pin and pins.enabled():
+        bonus = pins.cached_bonus("prefill", pin_first, page_table, k_cache.shape[1],
+                                  logits_width, compress_ratio)
+        row_request = torch.searchsorted(
+            query_start_loc[1:].contiguous(),
+            torch.arange(rows, device=q.device, dtype=query_start_loc.dtype)
+            + query_start_loc[0],
+            right=True,
+        ).clamp(max=bonus.shape[0] - 1)
+
     for query_start in range(0, rows, rows_per_chunk):
         query_end = min(query_start + rows_per_chunk, rows)
         query_slice = slice(query_start, query_end)
@@ -684,6 +752,8 @@ def qsa_select_paged_prefill(
             query_offset=query_start,
             num_queries=query_end - query_start,
         )
+        if bonus is not None:
+            logits.add_(bonus.index_select(0, row_request[query_slice]))
         _topk(
             logits,
             visible_blocks[query_slice],

@@ -138,14 +138,26 @@ class QSAIndexer(nn.Module):
         # while continuing to update the QSA side cache.
         self.skip_topk = False
         # Newest blocks forced into the selection; 0 for the target, which
-        # ranks by score alone. The MTP draft sets it (see model.patch_mtp).
+        # ranks by score (plus tool-call pins); the MTP draft sets its own
+        # (see model.patch_mtp).
         self.recent_blocks = 0
+        # Tool-call pinning (pins.py) for the target's layers; the MTP draft's
+        # cache is paged separately from the main KV the flags follow.
+        self.pin = "mtp" not in prefix
+        layer_types = getattr(vllm_config.model_config.hf_text_config, "layer_types", None) or []
+        full = [i for i, kind in enumerate(layer_types) if kind == "full_attention"]
+        # The step's first QSA layer computes the shared pin bonus.
+        self.pin_first = bool(full) and f".layers.{full[0]}." in f".{prefix}."
 
         self.index_qk_proj = ReplicatedLinear(
             int(config.hidden_size),
             (self.index_n_heads + self.index_kv_heads) * self.index_head_dim,
             bias=False,
             quant_config=quant_config,
+            # The release ships the indexer in FP32, but BF16 selects the same
+            # blocks (511 of 512 against an FP32 recompute at 136K, the one
+            # difference at the cut-off) for half the weight reads per step.
+            params_dtype=vllm_config.model_config.dtype,
             prefix=f"{prefix}.index_qk_proj" if prefix else "index_qk_proj",
         )
         self.q_layernorm = GemmaRMSNorm(
@@ -437,6 +449,8 @@ class QSAIndexer(nn.Module):
                 decode_query_len,
                 block_indices[decode_slice],
                 self.recent_blocks,
+                pin=self.pin,
+                pin_first=self.pin_first,
             )
 
         # Prefill requests follow the leading decode rows in the reordered batch.
@@ -455,6 +469,8 @@ class QSAIndexer(nn.Module):
                 block_indices[prefill_slice],
                 compressed_metadata.max_seq_len,
                 self.recent_blocks,
+                pin=self.pin,
+                pin_first=self.pin_first,
             )
         profile.mark("select")
         expand_qsa_block_indices(

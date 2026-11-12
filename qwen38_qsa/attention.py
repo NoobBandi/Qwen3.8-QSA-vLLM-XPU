@@ -54,7 +54,7 @@ from vllm.v1.attention.backends.flash_attn import (
 )
 from vllm.v1.kv_cache_interface import FullAttentionSpec, KVCacheSpec, get_kv_quant_mode
 
-from . import profile
+from . import pins, profile
 from .indexer_qsa import QSAIndexer
 from .qsa_cache import QSAForwardMetadata
 
@@ -531,6 +531,10 @@ class QSAQwen3_5Attention(Qwen3NextAttention, AttentionLayerBase):
                 main_metadata.max_seq_len,
                 self.indexer.output_width,
             )
+        if self.indexer.pin and self.indexer.pin_first:
+            # Once per step (every layer shares the main KV slots), and before
+            # selection, so a <tool_call> earlier in this chunk counts.
+            pins.write_slots(main_metadata.slot_mapping[:num_tokens])
         self.indexer.skip_topk = not sparse
         self.indexer(projected_qk, positions, self.topk_indices_buffer[:num_tokens])
         self.indexer.skip_topk = False

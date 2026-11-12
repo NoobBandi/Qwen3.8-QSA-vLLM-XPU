@@ -11,6 +11,7 @@ from vllm.model_executor.models.qwen3_5 import Qwen3_5ForConditionalGeneration
 
 import os
 
+from . import pins
 from .attention import QSAQwen3_5Attention, indexer_config
 from .indexer_qsa import QSAIndexer
 
@@ -35,6 +36,19 @@ class QSAQwen3_5ForConditionalGeneration(Qwen3_5ForConditionalGeneration):
             super().__init__(vllm_config=vllm_config, prefix=prefix)
         finally:
             qwen3_5.Qwen3NextAttention = dense
+        pins.setup(vllm_config, vllm_config.device_config.device)
+
+    def embed_input_ids(self, input_ids, multimodal_embeddings=None, *, is_multimodal=None):
+        # vLLM embeds each step's token ids here, outside the XPU graph.
+        pins.mark_tokens(input_ids)
+        return super().embed_input_ids(
+            input_ids, multimodal_embeddings, is_multimodal=is_multimodal
+        )
+
+    def forward(self, input_ids, positions, intermediate_tensors=None, inputs_embeds=None, **kwargs):
+        if input_ids is not None and inputs_embeds is None:
+            pins.mark_tokens(input_ids)     # text-only path: ids reach the forward
+        return super().forward(input_ids, positions, intermediate_tensors, inputs_embeds, **kwargs)
 
     def load_weights(self, weights: Iterable[tuple[str, torch.Tensor]]) -> set[str]:
         indexer: list[tuple[str, torch.Tensor]] = []
