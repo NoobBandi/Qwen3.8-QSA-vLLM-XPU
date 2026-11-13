@@ -1,6 +1,6 @@
-{"prompt_tokens": 525, "decode_tok_s": [66.9, 66.8, 66.9], "accepted_per_step": 2.07}
-{"prompt_tokens": 4036, "decode_tok_s": [66.2, 65.6, 66.1], "accepted_per_step": 2.07}
-{"prompt_tokens": 15963, "decode_tok_s": [66.1, 63.6, 63.1], "accepted_per_step": 2.0}
-{"prompt_tokens": 64330, "decode_tok_s": [67.9, 68.5, 67.0], "accepted_per_step": 2.17}
-{"prompt_tokens": 127920, "decode_tok_s": [63.2, 65.1, 64.1], "accepted_per_step": 2.02}
-{"prompt_tokens": 256025, "decode_tok_s": [63.1, 62.7, 62.6], "accepted_per_step": 1.95}
+{"prompt_tokens": 525, "decode_tok_s": [67.6, 67.6, 67.6], "accepted_per_step": 2.09}
+{"prompt_tokens": 4036, "decode_tok_s": [66.8, 66.7, 67.8], "accepted_per_step": 2.11}
+{"prompt_tokens": 15963, "decode_tok_s": [61.4, 62.4, 63.2], "accepted_per_step": 1.9}
+{"prompt_tokens": 64330, "decode_tok_s": [64.5, 64.5, 65.5], "accepted_per_step": 2.03}
+{"prompt_tokens": 127920, "decode_tok_s": [64.3, 63.8, 62.8], "accepted_per_step": 1.97}
+{"prompt_tokens": 256025, "decode_tok_s": [69.4, 61.7, 69.3], "accepted_per_step": 2.14}

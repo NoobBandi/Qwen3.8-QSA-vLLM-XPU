@@ -16,15 +16,17 @@ Throughput in tokens/s:
 
 | Context | Prefill, QSA | Prefill, dense | Decode, QSA | Decode, dense |
 |--------:|-------------:|---------------:|------------:|--------------:|
-| 0.5K | 1,566 | 1,617 | 66.9 | 71.2 |
-| 4K | 2,090 | 2,221 | 66.0 | 74.4 |
-| 16K | 2,060 | 2,324 | 64.3 | 70.0 |
-| 64K | 1,989 | 2,064 | 67.8 | 66.1 |
-| 128K | **1,922** | 1,741 | **64.1** | 59.2 |
-| 256K | **1,808** | 1,299 | **62.8** | 51.6 |
+| 0.5K | 1,520 | 1,617 | 67.6 | 71.2 |
+| 4K | 2,082 | 2,221 | 67.1 | 74.4 |
+| 16K | 2,047 | 2,324 | 62.3 | 70.0 |
+| 64K | 1,981 | 2,064 | 64.8 | 66.1 |
+| 128K | **1,923** | 1,741 | **63.6** | 59.2 |
+| 256K | **1,825** | 1,299 | **66.8** | 51.6 |
 
-At 256K, QSA prefills 1.39× and decodes 1.22× as fast as dense. Below 64K, prefill is 3–11% slower
-and decode 6–11% slower: the indexer, exact top-k and tool-call pinning have a fixed cost per step.
+At 256K, QSA prefills 1.41× and decodes 1.29× as fast as dense. Up to 64K, prefill is 4–12% slower
+and decode 2–11% slower: the indexer, exact top-k and tool-call pinning have a fixed cost per step.
+The QSA numbers were measured with indexers fine-tuned locally on long agent traces (not published
+yet); the release's indexers run at the same speed but accept fewer MTP tokens at long context.
 
 The two runs differ only in attention. Both use the same vLLM build and the same `scripts/serve.sh` settings:
 
@@ -106,8 +108,9 @@ while kernels compile. If you write your own command, keep these settings:
 ## Limitations
 
 - Tested only on 2× Arc Pro B70 with vLLM 0.31.0.
-- Below 64K, prefill and decode are up to 11% slower than dense.
-- At 256K, the borrowed draft indexer accepts 1.95 of 3 MTP tokens per step; dense accepts 2.27.
+- Up to 64K, prefill and decode are up to 12% slower than dense.
+- At 256K, the borrowed draft indexer accepts 2.14 of 3 MTP tokens per step (1.95 with the release's
+  indexers); dense accepts 2.27.
 - The release's indexers were distilled at 16K on web text with the backbone frozen (the paper's stage
   1 only). Tool-call pinning makes up for what they miss in long agent sessions.
 - Requests with images are attended sparsely. The reference runs them dense; long multimodal contexts
