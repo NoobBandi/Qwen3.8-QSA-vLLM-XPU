@@ -12,6 +12,7 @@ import time
 import torch
 
 from qwen38_qsa.ops import qsa_indexer as QI
+from qwen38_qsa.ops.radix_topk import radix_topk
 from vllm import _custom_ops as ops
 
 torch.manual_seed(0)
@@ -53,8 +54,12 @@ for cols in (8192, 34000):
         out.fill_(-7)
         QI._topk(logits.clone(), visible, K * 4, 4, out, None)
         ours = errors(logits, visible, out)
-        failed += ours
-        print(f"{cols:6d} cols, {name:22s}: stock kernel {stock}/4 rows wrong, qwen38_qsa {ours}/4")
+        out.fill_(-7)
+        radix_topk(logits, visible, K, out)       # decode's selection (radix_topk.py)
+        radix = errors(logits, visible, out)
+        failed += ours + radix
+        print(f"{cols:6d} cols, {name:22s}: stock kernel {stock}/4 rows wrong, "
+              f"qwen38_qsa {ours}/4, radix {radix}/4")
 
 # Prefill-sized batches take the fast kernel plus a repair of duplicate rows.
 for name, base in (("narrow + 64 far above", 10 + 0.05 * torch.randn(256, 34000, device=dev)),

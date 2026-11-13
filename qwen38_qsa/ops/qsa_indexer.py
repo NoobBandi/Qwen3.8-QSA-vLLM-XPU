@@ -8,6 +8,7 @@ import torch
 import vllm.envs as envs
 
 from .. import pins
+from .radix_topk import radix_topk
 from vllm import _custom_ops as ops
 from vllm.model_executor.warmup.jit_warmup_triton_helper import (
     TritonWarmupTensor,
@@ -35,6 +36,11 @@ _DECODE_BLOCK_N = _DECODE_LAUNCH[0]
 _EXACT_TOPK = _os.environ.get("QWEN38_QSA_EXACT_TOPK", "1") == "1"
 # Batches up to this many rows (decode) always take the exact top-k.
 _EXACT_ROWS = 64
+# qwen38_qsa: decode-sized batches select by radix select over the visible
+# columns (radix_topk.py), 2-6x faster than torch.topk over the whole graph
+# width; QWEN38_QSA_RADIX_TOPK=0 goes back to torch.topk.
+_RADIX_TOPK = (_os.environ.get("QWEN38_QSA_RADIX_TOPK", "1") == "1"
+               and current_platform.is_xpu())
 
 
 @triton.jit
@@ -664,9 +670,16 @@ def qsa_select_paged_decode(
         STAGES=_DECODE_LAUNCH[1],
         num_warps=1 if k_cache.dtype == torch.float8_e4m3fn else _DECODE_LAUNCH[2],
     )
+    bonus = None
     if pin and pins.enabled():
         bonus = pins.cached_bonus("decode", pin_first, page_table, k_cache.shape[1],
                                   columns, compress_ratio)
+    if _EXACT_TOPK and _RADIX_TOPK and q.shape[0] <= _EXACT_ROWS:
+        # The bonus and the recent-block boost are added as the keys are read.
+        radix_topk(logits, visible_blocks, token_topk // compress_ratio, block_indices,
+                   recent=recent_blocks, bonus=bonus, rows_per_request=decode_query_len)
+        return
+    if bonus is not None:
         logits.view(num_requests, decode_query_len, columns).add_(bonus[:, None, :])
     _topk(
         logits,

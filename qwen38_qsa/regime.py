@@ -3,8 +3,9 @@
 
 QSA's selection (scoring, top-k and index expansion in every layer) costs
 about the same at any context length, while dense attention grows with it.
-On 2x B70 dense is faster up to about 48K tokens: decode steps cross near 40K,
-and dense also accepts more MTP draft tokens. So steps whose longest context
+On 2x B70 dense is faster up to about 32K tokens: decode steps cross near 12K,
+but dense accepts more MTP draft tokens, which evens tok/s out near 32K;
+prefill chunks cross near 40K. So steps whose longest context
 is within ``THRESHOLD`` attend densely through XPU flash; the indexer still
 updates its side caches, so a request that grows past the threshold switches
 to sparse attention with everything in place. Dense attention is what the
@@ -16,14 +17,14 @@ once per regime, and replays the one matching the step: the attention
 metadata builder runs on the host before every replay and records whether the
 step's longest context is within the threshold.
 
-QWEN38_QSA_DENSE_BELOW sets the threshold in tokens (default 49152). 0 turns
+QWEN38_QSA_DENSE_BELOW sets the threshold in tokens (default 32768). 0 turns
 the switch off; the indexer's output width (2052) keeps QSA's result exactly,
 since up to there it selects every token anyway.
 """
 
 import os
 
-THRESHOLD = int(os.environ.get("QWEN38_QSA_DENSE_BELOW", "49152"))
+THRESHOLD = int(os.environ.get("QWEN38_QSA_DENSE_BELOW", "32768"))
 
 DENSE = False                 # the current step's regime, for graph replay
 CAPTURING: bool | None = None  # forced regime while graphs are captured
