@@ -19,5 +19,7 @@ def register() -> None:
         ARCH, model_configs.Qwen3_5ForConditionalGenerationConfig
     )
     from .model import patch_mtp
+    from .regime import patch_graph_managers
 
     patch_mtp()
+    patch_graph_managers()

@@ -54,7 +54,7 @@ from vllm.v1.attention.backends.flash_attn import (
 )
 from vllm.v1.kv_cache_interface import FullAttentionSpec, KVCacheSpec, get_kv_quant_mode
 
-from . import pins, profile
+from . import pins, profile, regime
 from .indexer_qsa import QSAIndexer
 from .qsa_cache import QSAForwardMetadata
 
@@ -65,6 +65,12 @@ class QSAMetadataBuilder(FlashAttentionMetadataBuilder):
     """Flash metadata supporting uniform decode and target-verify graphs."""
 
     _cudagraph_support: ClassVar[AttentionCGSupport] = AttentionCGSupport.UNIFORM_BATCH
+
+    def build(self, common_prefix_len, common_attn_metadata, fast_build=False):
+        metadata = super().build(common_prefix_len, common_attn_metadata, fast_build)
+        # Runs on the host before every step, graph replays included.
+        regime.observe(metadata.max_seq_len)
+        return metadata
 
 
 class QSAFlashAttentionBackend(FlashAttentionBackend):
@@ -271,16 +277,54 @@ class QSAFlashAttentionImpl(FlashAttentionImpl):
     ) -> torch.Tensor:
         """Full causal attention over the paged cache, then the output gate.
 
-        Triton's unified attention rather than the XPU flash kernel: QSA packs
-        its side caches beside the K/V pages (BLNHC), so a block's K/V is
-        followed by a gap, and the flash kernel ignores the block stride and
-        reads the wrong rows (about 50 % relative error). Triton follows the
-        strides.
+        XPU flash follows a block stride only in multiples of 64 token rows,
+        and QSA's packed blocks (each also holds the indexer's compressed
+        keys) are 14,586 rows apart, so it would read the wrong rows.
+        ``get_kv_cache_spec`` aligns the stride to ``FLASH_BLOCK`` rows, and
+        flash is shown the cache as ``FLASH_BLOCK``-token blocks laid end to
+        end, gaps included, with the block table translated to match: every
+        block stride it sees is then a whole number of its blocks, which
+        holds whatever tile the kernel steps in. Triton's unified attention
+        follows any stride but is 20-300x slower here; it remains the fallback.
         """
-        from vllm.v1.attention.ops.triton_unified_attention import unified_attention
-
         num_tokens = attn_metadata.num_actual_tokens
         key_cache, value_cache = kv_cache.transpose(1, 2).split(self.head_size, dim=-1)
+        num_blocks, block_size, num_kv_heads, _ = key_cache.shape
+        row = key_cache.stride(1)
+        if key_cache.stride(0) % (FLASH_BLOCK * row) == 0 and block_size % FLASH_BLOCK == 0:
+            from vllm.v1.attention.backends.fa_utils import flash_attn_varlen_func
+
+            per_block = key_cache.stride(0) // (FLASH_BLOCK * row)
+            pieces = block_size // FLASH_BLOCK
+            virtual = ((num_blocks - 1) * per_block + pieces, FLASH_BLOCK, num_kv_heads, self.head_size)
+            strides = (FLASH_BLOCK * row, row, key_cache.stride(2), 1)
+            keys = key_cache.as_strided(virtual, strides)
+            values = value_cache.as_strided(virtual, strides)
+            offsets = getattr(layer, "_flash_piece_offsets", None)
+            if offsets is None or offsets.device != key_cache.device:
+                offsets = torch.arange(pieces, dtype=torch.int32, device=key_cache.device)
+                layer._flash_piece_offsets = offsets
+            table = attn_metadata.block_table
+            table = (table[:, :, None] * per_block + offsets).view(table.shape[0], -1)
+            flash_attn_varlen_func(
+                q=query[:num_tokens],
+                k=keys,
+                v=values,
+                out=output[:num_tokens],
+                cu_seqlens_q=attn_metadata.query_start_loc,
+                max_seqlen_q=attn_metadata.max_query_len,
+                seqused_k=attn_metadata.seq_lens,
+                max_seqlen_k=attn_metadata.max_seq_len,
+                softmax_scale=self.scale,
+                causal=True,
+                block_table=table,
+            )
+            gate = output_gate[:num_tokens].view(output[:num_tokens].shape)
+            output[:num_tokens].mul_(torch.sigmoid(gate))
+            return output
+        logger.warning_once("QSA dense attention: flash cannot tile this cache, using Triton (slow)")
+        from vllm.v1.attention.ops.triton_unified_attention import unified_attention
+
         unified_attention(
             q=query[:num_tokens],
             k=key_cache,
@@ -309,6 +353,8 @@ class QSAFlashAttentionImpl(FlashAttentionImpl):
 # QWEN38_QSA_DENSE=1 attends in full everywhere (the indexer still runs):
 # the same model without sparsity, for comparisons.
 _DENSE = __import__("os").environ.get("QWEN38_QSA_DENSE") == "1"
+# Token rows per block as XPU flash sees the cache (see forward_dense).
+FLASH_BLOCK = 64
 # QWEN38_QSA_SYNC=1 synchronises around each stage of an eager QSA step, so
 # a device fault is reported by the stage that caused it (debugging only).
 _SYNC = __import__("os").environ.get("QWEN38_QSA_SYNC") == "1"
@@ -485,6 +531,10 @@ class QSAQwen3_5Attention(Qwen3NextAttention, AttentionLayerBase):
         return self.attn_backend
 
     def get_kv_cache_spec(self, vllm_config: VllmConfig) -> KVCacheSpec:
+        # Dense attention tiles the cache in FLASH_BLOCK-token blocks (see
+        # forward_dense): align the packed block stride to that tiling. It
+        # costs at most FLASH_BLOCK token rows per block (12 KiB here).
+        row_bytes = self.num_kv_heads * 2 * self.head_dim * self.kv_cache_torch_dtype.itemsize
         return FullAttentionSpec(
             block_size=vllm_config.cache_config.block_size,
             num_kv_heads=self.num_kv_heads,
@@ -492,6 +542,7 @@ class QSAQwen3_5Attention(Qwen3NextAttention, AttentionLayerBase):
             head_size_v=self.head_dim,
             dtype=self.kv_cache_torch_dtype,
             kv_quant_mode=get_kv_quant_mode(self.kv_cache_dtype),
+            block_stride_alignment=FLASH_BLOCK * row_bytes,
         )
 
     def _run_qsa(
@@ -519,10 +570,9 @@ class QSAQwen3_5Attention(Qwen3NextAttention, AttentionLayerBase):
         )
         if side_metadata.num_actual_tokens != num_tokens:
             raise RuntimeError("QSA main and side metadata token counts disagree")
-        # Prefill attends sparsely too, as the indexer was trained (and the
-        # dense kernels are no option here: XPU flash misreads the packed
-        # cache, Triton prefill runs at ~100 tok/s at long context).
-        sparse = not _DENSE
+        # Short contexts attend densely (regime.py); past the threshold,
+        # prefill attends sparsely too, as the indexer was trained.
+        sparse = not _DENSE and not regime.dense_step(main_metadata.max_seq_len)
         _checkpoint("entry", self.layer_name)
         profile.start()
         if sparse and main_metadata.max_seq_len > self.indexer.output_width:

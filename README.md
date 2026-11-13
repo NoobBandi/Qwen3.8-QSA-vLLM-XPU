@@ -5,7 +5,8 @@ including its sparse attention.
 
 QSA ([paper](https://arxiv.org/abs/2608.30320)) adds a small learned indexer to each of the model's 16
 full-attention layers. For each query, the indexer picks 2,048 earlier tokens, and the layer attends only
-those. As a result, speed hardly depends on context length. The reference engine,
+those. As a result, speed hardly depends on context length. Below 48K, where attending everything is
+still cheaper, the plugin attends densely instead. The reference engine,
 [kuraneko1/Qwen3.8-27B-QSA-llama.cpp](https://github.com/kuraneko1/Qwen3.8-27B-QSA-llama.cpp), targets
 NVIDIA GPUs. This repository is a vLLM plugin that brings the same sparse path to Intel XPU. It has been
 tested on 2× Arc Pro B70.
@@ -16,17 +17,17 @@ Throughput in tokens/s:
 
 | Context | Prefill, QSA | Prefill, dense | Decode, QSA | Decode, dense |
 |--------:|-------------:|---------------:|------------:|--------------:|
-| 0.5K | 1,520 | 1,617 | 67.6 | 71.2 |
-| 4K | 2,082 | 2,221 | 67.1 | 74.4 |
-| 16K | 2,047 | 2,324 | 62.3 | 70.0 |
-| 64K | 1,981 | 2,064 | 64.8 | 66.1 |
-| 128K | **1,923** | 1,741 | **63.6** | 59.2 |
-| 256K | **1,825** | 1,299 | **66.8** | 51.6 |
+| 0.5K | 1,620 | 1,617 | 74.4 | 71.2 |
+| 4K | 2,392 | 2,221 | 71.3 | 74.4 |
+| 16K | 2,334 | 2,324 | 70.6 | 70.0 |
+| 64K | 2,081 | 2,064 | 68.7 | 66.1 |
+| 128K | **1,972** | 1,741 | **62.2** | 59.2 |
+| 256K | **1,847** | 1,299 | **68.0** | 51.6 |
 
-At 256K, QSA prefills 1.41× and decodes 1.29× as fast as dense. Up to 64K, prefill is 4–12% slower
-and decode 2–11% slower: the indexer, exact top-k and tool-call pinning have a fixed cost per step.
-The QSA numbers were measured with indexers fine-tuned locally on long agent traces (not published
-yet); the release's indexers run at the same speed but accept fewer MTP tokens at long context.
+At 256K, QSA prefills 1.42× and decodes 1.32× as fast as dense. Up to 48K both attend densely, and
+the two runs are within a few percent of each other. The QSA numbers were measured with indexers
+fine-tuned locally on long agent traces (not published yet); the release's indexers run at the same
+speed but accept fewer MTP tokens at long context.
 
 The two runs differ only in attention. Both use the same vLLM build and the same `scripts/serve.sh` settings:
 
@@ -39,7 +40,7 @@ Dense loads the release as plain Qwen3.5, so its indexers are ignored. The promp
 code. Prefill is measured cold, as prompt tokens per second until the first token. Raw results are in
 [`docs/results`](docs/results).
 
-A needle test (three passphrases at 15%, 50% and 85% of the context) found 3 of 3 from 20K to 230K.
+A needle test (three passphrases at 15%, 50% and 85% of the context) found 3 of 3 from 6K to 230K.
 Tool calls and image input work.
 
 ## Quick start
@@ -83,7 +84,13 @@ while kernels compile. If you write your own command, keep these settings:
   `<|im_start|>` where `<function=` belongs, and the parser drops the call: an agent then stops
   mid-task. In a 136K-token session, a failing call went from 3 valid of 36 samples to 36 of 36, which
   matches dense. `QWEN38_QSA_PIN_CAP=0` turns it off.
-- **Prefill** is sparse as well as decode.
+- **Dense below 48K.** QSA's selection costs about the same at any length, while dense attention grows
+  with the context; on 2× B70 dense is faster up to about 48K. Steps whose longest context is within
+  that attend densely through XPU flash, and the indexer keeps its caches up to date, so a request that
+  grows past it turns sparse with everything in place. A decode step is one XPU graph, so every graph
+  is captured twice, dense and sparse, and the step replays the one that matches.
+  `QWEN38_QSA_DENSE_BELOW` sets the threshold in tokens (0 turns it off).
+- **Prefill** past the threshold is sparse as well as decode.
 - **MTP draft.** The draft layer is sparse too, and borrows layer 63's indexer, because the checkpoint
   has none for it. It attends 4,096 tokens, and the newest 1,024 are always among them. Set
   `QWEN38_QSA_DRAFT_BUDGET` and `QWEN38_QSA_DRAFT_RECENT` to change those numbers.
@@ -92,10 +99,12 @@ while kernels compile. If you write your own command, keep these settings:
 
 ## Pitfalls on XPU
 
-- **XPU flash attention ignores the KV cache's block stride.** On a cache whose blocks are not
-  contiguous, such as QSA's packed layout, it silently reads the wrong rows (about 50% error). See
-  [`repro/xpu_flash_block_stride.py`](repro/xpu_flash_block_stride.py). This plugin never uses it on
-  a QSA cache.
+- **XPU flash attention follows a KV block stride only in multiples of 64 token rows.** QSA packs the
+  indexer's keys beside each block's K/V, which puts blocks 14,586 rows apart, and flash silently reads
+  the wrong rows (about 50% error). The plugin pads each block to a multiple of 64 rows (12 KiB) and
+  shows flash the cache as 64-token blocks. See
+  [`repro/xpu_flash_block_stride.py`](repro/xpu_flash_block_stride.py). Triton's `unified_attention`
+  follows any stride but is 20–300× slower at decode here.
 - **vllm-xpu-kernels 0.1.15 overflows int32 GDN offsets** with this layout and loses the device
   ([#658](https://github.com/vllm-project/vllm-xpu-kernels/issues/658)). Install 0.1.17.1 instead.
 - **vllm-xpu-kernels' `top_k_per_row_decode` is not exact.** It returns duplicate indices, and so drops
@@ -108,8 +117,7 @@ while kernels compile. If you write your own command, keep these settings:
 ## Limitations
 
 - Tested only on 2× Arc Pro B70 with vLLM 0.31.0.
-- Up to 64K, prefill and decode are up to 12% slower than dense.
-- At 256K, the borrowed draft indexer accepts 2.14 of 3 MTP tokens per step (1.95 with the release's
+- At 256K, the borrowed draft indexer accepts 2.19 of 3 MTP tokens per step (1.95 with the release's
   indexers); dense accepts 2.27.
 - The release's indexers were distilled at 16K on web text with the backbone frozen (the paper's stage
   1 only). Tool-call pinning makes up for what they miss in long agent sessions.
@@ -125,6 +133,7 @@ python3 tests/test_kernels.py          # kernels against a torch reference, on X
 python3 tests/test_prefill_select.py
 python3 tests/test_topk.py             # top-k exactness
 python3 tests/test_pins.py             # tool-call pinning (CPU)
+python3 tests/test_regime.py           # dense/sparse graph switching (CPU)
 
 # Benchmarks against a running server. corpus.txt is any long text; vLLM's source works:
 find "$(python3 -c 'import vllm, os; print(os.path.dirname(vllm.__file__))')" -name "*.py" | sort | xargs cat > corpus.txt
