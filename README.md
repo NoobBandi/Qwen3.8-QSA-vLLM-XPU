@@ -17,14 +17,14 @@ Throughput in tokens/s:
 
 | Context | Prefill, QSA | Prefill, dense | Decode, QSA | Decode, dense |
 |--------:|-------------:|---------------:|------------:|--------------:|
-| 0.5K | 1,669 | 1,617 | 74.5 | 71.2 |
-| 4K | 2,394 | 2,221 | 71.3 | 74.4 |
-| 16K | 2,333 | 2,324 | 70.6 | 70.0 |
-| 64K | 2,076 | 2,064 | **71.6** | 66.1 |
-| 128K | **1,969** | 1,741 | **68.2** | 59.2 |
-| 256K | **1,845** | 1,299 | **68.9** | 51.6 |
+| 0.5K | 1,669 | 1,617 | 83.3 | 80.6 |
+| 4K | 2,394 | 2,221 | 79.7 | 83.4 |
+| 16K | 2,333 | 2,324 | 79.1 | 78.3 |
+| 64K | 2,076 | 2,064 | **79.8** | 74.1 |
+| 128K | **1,969** | 1,741 | **74.0** | 64.6 |
+| 256K | **1,845** | 1,299 | **75.7** | 55.7 |
 
-At 256K, QSA prefills 1.42× and decodes 1.34× as fast as dense. Up to 32K both attend densely, and
+At 256K, QSA prefills 1.42× and decodes 1.36× as fast as dense. Up to 32K both attend densely, and
 the two runs are within a few percent of each other. The QSA numbers were measured with indexers
 fine-tuned locally on long agent traces (not published yet); the release's indexers run at the same
 speed but accept fewer MTP tokens at long context.
@@ -33,7 +33,7 @@ The two runs differ only in attention. Both use the same vLLM build and the same
 
 - tensor parallel 2;
 - online FP8 weights;
-- MTP with 3 draft tokens;
+- MTP with 3 draft tokens, through the plugin's FP8 draft head (below);
 - greedy decoding.
 
 Dense loads the release as plain Qwen3.5, so its indexers are ignored. The prompts are vLLM's source
@@ -95,6 +95,20 @@ while kernels compile. If you write your own command, keep these settings:
 - **MTP draft.** The draft layer is sparse too, and borrows layer 63's indexer, because the checkpoint
   has none for it. It attends 4,096 tokens, and the newest 1,024 are always among them. Set
   `QWEN38_QSA_DRAFT_BUDGET` and `QWEN38_QSA_DRAFT_RECENT` to change those numbers.
+- **FP8 draft head.** The MTP draft computes logits three times per decode step, and each time read the
+  whole BF16 lm_head (248K tokens, 1.27 GB per card): 6.4 ms of a ~43 ms step, more than all 48 GDN
+  layers together. The draft now keeps the 147,456 most used tokens in FP8, split evenly across the
+  cards, and takes 0.65 ms instead of 2.13. The target still verifies every draft with its own BF16
+  head, so the output does not change. Acceptance did not change either, and decode got 11–14% faster
+  in Chinese and English chat, code, and at every context length. The ranking
+  ([`draft_vocab.txt`](qwen38_qsa/draft_vocab.txt)) comes from the model's own answers, agent
+  traces, code, and jieba's word frequencies in Simplified and Traditional Chinese. What it leaves out
+  is mostly other scripts (Korean, Arabic, Thai, Cyrillic...); those still decode correctly, with fewer
+  drafts accepted. `QWEN38_QSA_DRAFT_VOCAB=full` keeps every token, and `QWEN38_QSA_DRAFT_HEAD=off`
+  restores the BF16 head. The head takes 377 MB per card, which is why `scripts/serve.sh` uses
+  `--gpu-memory-utilization 0.947`. If something else holds memory on a card (a desktop session, say)
+  and 256K no longer fits, size the KV cache to what 256K needs with `--kv-cache-memory 9960000000`
+  and prefill in 3,072-token chunks (`--max-num-batched-tokens 3072`, about 2% slower prefill).
 - **XPU graphs.** Selection, the cache update and attention form one custom op, so a whole decode step
   is captured as one XPU graph.
 - **Radix-select top-k.** Under a captured graph, decode's scores are as wide as the longest context
@@ -141,6 +155,7 @@ python3 tests/test_kernels.py          # kernels against a torch reference, on X
 python3 tests/test_prefill_select.py
 python3 tests/test_topk.py             # top-k exactness
 python3 tests/test_radix_topk.py       # decode's radix select against torch.topk, and its time
+python3 tests/test_draft_head.py       # the FP8 draft head against the BF16 head, on XPU
 python3 tests/test_pins.py             # tool-call pinning (CPU)
 python3 tests/test_regime.py           # dense/sparse graph switching (CPU)
 

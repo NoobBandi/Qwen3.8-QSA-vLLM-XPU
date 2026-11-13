@@ -22,3 +22,6 @@ qwen38_qsa = "qwen38_qsa:register"
 
 [tool.setuptools.packages.find]
 include = ["qwen38_qsa*"]
+
+[tool.setuptools.package-data]
+qwen38_qsa = ["draft_vocab.txt"]

@@ -18,8 +18,10 @@ def register() -> None:
     model_configs.MODELS_CONFIG_MAP.setdefault(
         ARCH, model_configs.Qwen3_5ForConditionalGenerationConfig
     )
+    from .draft_head import patch_speculator
     from .model import patch_mtp
     from .regime import patch_graph_managers
 
     patch_mtp()
     patch_graph_managers()
+    patch_speculator()
