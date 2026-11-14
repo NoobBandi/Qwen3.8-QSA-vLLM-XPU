@@ -17,14 +17,14 @@ Throughput in tokens/s:
 
 | Context | Prefill, QSA | Prefill, dense | Decode, QSA | Decode, dense |
 |--------:|-------------:|---------------:|------------:|--------------:|
-| 0.5K | 1,669 | 1,617 | 83.3 | 80.6 |
-| 4K | 2,394 | 2,221 | 79.7 | 83.4 |
-| 16K | 2,333 | 2,324 | 79.1 | 78.3 |
-| 64K | 2,076 | 2,064 | **79.8** | 74.1 |
-| 128K | **1,969** | 1,741 | **74.0** | 64.6 |
-| 256K | **1,845** | 1,299 | **75.7** | 55.7 |
+| 0.5K | 1,938 | 2,019 | 83.3 | 80.6 |
+| 4K | 2,411 | 2,418 | 79.8 | 83.4 |
+| 16K | 2,345 | 2,360 | 79.1 | 78.3 |
+| 64K | 2,091 | 2,065 | **79.2** | 74.0 |
+| 128K | **1,978** | 1,742 | **74.4** | 64.6 |
+| 256K | **1,854** | 1,300 | **79.6** | 55.7 |
 
-At 256K, QSA prefills 1.42× and decodes 1.36× as fast as dense. Up to 32K both attend densely, and
+At 256K, QSA prefills 1.43× and decodes 1.43× as fast as dense. Up to 32K both attend densely, and
 the two runs are within a few percent of each other. The QSA numbers were measured with indexers
 fine-tuned locally on long agent traces (not published yet); the release's indexers run at the same
 speed but accept fewer MTP tokens at long context.
@@ -37,7 +37,8 @@ The two runs differ only in attention. Both use the same vLLM build and the same
 - greedy decoding.
 
 Dense loads the release as plain Qwen3.5, so its indexers are ignored. The prompts are vLLM's source
-code. Prefill is measured cold, as prompt tokens per second until the first token. Raw results are in
+code. Prefill is measured without prefix-cache hits, after one warm-up request at each length, as
+prompt tokens per second until the first token. Raw results are in
 [`docs/results`](docs/results).
 
 A needle test (three passphrases at 15%, 50% and 85% of the context) found 3 of 3 from 6K to 230K.

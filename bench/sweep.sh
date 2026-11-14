@@ -25,9 +25,9 @@ for mode in qsa dense; do
     kill -0 $server 2>/dev/null || { echo "$mode: server exited"; tail -5 "$log"; exit 1; }
     sleep 10
   done
-  # One short request first, so no measurement includes the first request's
-  # kernel compiles.
-  python3 bench/prefill.py --url "$URL" --lengths 1000 > /dev/null
+  # One request at every length first, so no measurement includes the kernel
+  # compiles and allocations a new shape triggers (about 12% at 4K).
+  python3 bench/prefill.py --url "$URL" --lengths "1000,$LENGTHS" > /dev/null
   python3 -u bench/prefill.py --url "$URL" --lengths "$LENGTHS" | tee "$OUT/$mode-prefill.jsonl"
   python3 -u bench/decode.py --url "$URL" --lengths "$LENGTHS" | tee "$OUT/$mode-decode.jsonl"
   echo "$mode: device lost $(grep -c DEVICE_LOST "$log" || true)"
